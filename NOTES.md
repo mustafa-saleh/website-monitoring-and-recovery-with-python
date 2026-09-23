@@ -321,5 +321,166 @@ ec2_resource_frankfurt.create_tags(
 )
 ```
 
+## 8 - EKS cluster information
 
+Boto3 can be used to fetch information about an EKS cluster, such as its name, status, endpoint, and version. Here's an example code snippet:
+
+```py
+import boto3
+eks_client = boto3.client('eks', region_name="eu-west-3")
+
+clusters = eks_client.list_clusters()['clusters']
+
+for cluster in clusters:
+  response = eks_client.describe_cluster(name=cluster)
+  cluster_info = response['cluster']
+
+  print(f"Cluster Name: {cluster_info['name']}")
+  print(f"Status: {cluster_info['status']}")
+  print(f"Endpoint: {cluster_info['endpoint']}")
+  print(f"Version: {cluster_info['version']}")
+```
+
+## 9 - Backup EC2 Volumes: Automate creating Snapshots
+
+Create 2 EC2 instances on AWS console & add "Name" tags "dev" & "prod" respectively. Run the following Python script to create snapshots of EC2 volumes with the "Name" tag "prod". The script uses the Boto3 library to interact with the AWS API and the schedule library to run the snapshot creation task every day.
+
+Tag the created volumes with "Name" tag "prod" to identify them for snapshot creation. The script fetches all volumes with the "Name" tag "prod" and creates snapshots for each of them. The snapshots are created in the same region as the volumes.
+
+EC2 volumes can be backed up by creating snapshots. Here's an example code snippet to automate creating snapshots of EC2 volumes:
+
+```py
+import boto3
+import schedule
+
+ec2_client = boto3.client('ec2', region_name="eu-central-1")
+
+def create_volume_snapshots():
+  volumes = ec2_client.describe_volumes(
+    Filters=[
+      {
+        'Name': 'tag:Name',
+        'Values': ['prod']
+      }
+    ]
+  )
+
+  for volume in volumes['Volumes']:
+    new_snapshot = ec2_client.create_snapshot(
+      VolumeId=volume['VolumeId']
+    )
+    print(new_snapshot)
+
+schedule.every().day.do(create_volume_snapshots)
+
+while True:
+    schedule.run_pending()
+```
+
+## 10 - Automate cleanup of old Snapshots
+
+To reduce the number of snapshots and save costs, we can automate the cleanup of old snapshots. Here's an example code snippet to delete snapshots and only keep the 2 most recent snapshots for each volume:
+
+```py
+import boto3
+from operator import itemgetter
+
+ec2_client = boto3.client('ec2', region_name="eu-central-1")
+
+volumes = ec2_client.describe_volumes(
+  Filters=[
+    {
+      'Name': 'tag:Name',
+      'Values': ['prod']
+    }
+  ]
+)
+
+for volume in volumes['Volumes']:
+  snapshots = ec2_client.describe_snapshots(
+    OwnerIds=['self'],
+    Filters=[
+      {
+        'Name': 'volume-id',
+        'Values': [volume['VolumeId']]
+      }
+    ]
+  )
+
+  sorted_by_date = sorted(snapshots['Snapshots'], key=itemgetter('StartTime'), reverse=True)
+
+  for snap in sorted_by_date[2:]:
+    response = ec2_client.delete_snapshot(
+      SnapshotId=snap['SnapshotId']
+    )
+    print(response)
+```
+
+## 11 - Automate restoring EC2 Volume from the Backup
+
+Snapshots can be used to restore EC2 volumes. Here's an example code snippet to automate restoring an EC2 volume from a snapshot & attaching it to an EC2 instance:
+
+```py
+import boto3
+from operator import itemgetter
+
+ec2_client = boto3.client('ec2', region_name="eu-central-1")
+ec2_resource = boto3.resource('ec2', region_name="eu-central-1")
+
+instance_id = "i-0671d0fe02906a969"
+
+volumes = ec2_client.describe_volumes(
+  Filters=[
+    {
+      'Name': 'attachment.instance-id',
+      'Values': [instance_id]
+    }
+  ]
+)
+
+instance_volume = volumes['Volumes'][0]
+
+snapshots = ec2_client.describe_snapshots(
+  OwnerIds=['self'],
+  Filters=[
+    {
+      'Name': 'volume-id',
+      'Values': [instance_volume['VolumeId']]
+    }
+  ]
+)
+
+latest_snapshot = sorted(snapshots['Snapshots'], key=itemgetter('StartTime'), reverse=True)[0]
+print(latest_snapshot['StartTime'])
+
+new_volume = ec2_client.create_volume(
+  SnapshotId=latest_snapshot['SnapshotId'],
+  AvailabilityZone="eu-central-1a",
+  TagSpecifications=[
+    {
+      'ResourceType': 'volume',
+      'Tags': [
+        {
+          'Key': 'Name',
+          'Value': 'prod'
+      }
+      ]
+    }
+  ]
+)
+
+while True:
+  vol = ec2_resource.Volume(new_volume['VolumeId'])
+  print(vol.state)
+  if vol.state == 'available':
+    ec2_resource.Instance(instance_id).attach_volume(
+      VolumeId=new_volume['VolumeId'],
+      Device='/dev/xvdb'
+    )
+    break
+```
+
+## 12 - Handling Errors
+
+To handle errors in Boto3, we can use try-except blocks to catch exceptions and handle them gracefully.
 
