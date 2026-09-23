@@ -1,23 +1,44 @@
 import boto3
-import schedule
 
-ec2_client = boto3.client('ec2', region_name="eu-west-3")
-ec2_resource = boto3.resource('ec2', region_name="eu-west-3")
+ec2_client_frankfurt = boto3.client('ec2', region_name="eu-central-1")
+ec2_resource_frankfurt = boto3.resource('ec2', region_name="eu-central-1")
+
+ec2_client_paris = boto3.client('ec2', region_name="eu-west-3")
+ec2_resource_paris = boto3.resource('ec2', region_name="eu-west-3")
+
+instance_ids_frankfurt = []
+instance_ids_paris = []
+
+reservations_frankfurt = ec2_client_frankfurt.describe_instances()['Reservations']
+for res in reservations_frankfurt:
+    instances = res['Instances']
+    for ins in instances:
+        instance_ids_frankfurt.append(ins['InstanceId'])
 
 
-def check_instance_status():
-    statuses = ec2_client.describe_instance_status(
-        IncludeAllInstances=True
-    )
-    for status in statuses['InstanceStatuses']:
-        ins_status = status['InstanceStatus']['Status']
-        sys_status = status['SystemStatus']['Status']
-        state = status['InstanceState']['Name']
-        print(f"Instance {status['InstanceId']} is {state} with instance status {ins_status} and system status {sys_status}")
-    print("#############################\n")
+response = ec2_resource_frankfurt.create_tags(
+    Resources=instance_ids_frankfurt,
+    Tags=[
+        {
+            'Key': 'environment',
+            'Value': 'prod'
+        },
+    ]
+)
+
+reservations_paris = ec2_client_paris.describe_instances()['Reservations']
+for res in reservations_paris:
+    instances = res['Instances']
+    for ins in instances:
+        instance_ids_paris.append(ins['InstanceId'])
 
 
-schedule.every(5).minutes.do(check_instance_status)
-
-while True:
-    schedule.run_pending()
+response = ec2_resource_paris.create_tags(
+    Resources=instance_ids_paris,
+    Tags=[
+        {
+            'Key': 'environment',
+            'Value': 'dev'
+        },
+    ]
+)
