@@ -1,84 +1,95 @@
-# AWS Data Backup & Restore with Python
+# Website Monitoring and Recovery with Python
 
-**Python Automation**, allows using the **Python** programming language together with **Boto3** (the AWS SDK for Python) to imperatively manage the full lifecycle of EC2 volume backups — creating snapshots on a schedule, pruning old snapshots to control storage cost, and restoring a volume from a snapshot on demand. Where a declarative infrastructure-as-code tool is best suited to *provisioning* resources once, Python is imperative and stateful by nature, making it the right tool for *recurring, conditional, data-driven operational tasks* like backup rotation.
+**Python** can be used as scripting tool to continuously monitor a live web application, detect outages by validating its HTTP responses, and automatically remediate those outages — restarting the containerized application or, if the whole server is unreachable, rebooting the underlying cloud instance and restarting the application on it. This is a class of problem that is a poor fit for declarative infrastructure-as-code tools: monitoring is an ongoing, stateful, conditional process (check → decide → act → repeat), not a one-time resource provisioning step, which is exactly the kind of recurring operational logic Python excels at.
 
 ## Overview
 
-This project demonstrates a **backup and disaster-recovery workflow** for Amazon EBS volumes attached to EC2 instances, built entirely with Python and Boto3. Three standalone scripts cover the full lifecycle: `volume-backups.py` runs on a schedule to snapshot every volume tagged as `prod`, `cleanup-snapshots.py` prunes old snapshots down to the two most recent per volume to control storage costs, and `restore-volume.py` recreates a volume from its latest snapshot and reattaches it to a running EC2 instance.
+This project demonstrates a **self-healing website monitoring pipeline** built entirely with Python, running against a real Nginx web server hosted on a Linode cloud instance and served through a Docker container. A single scheduled Python script continuously polls the site over HTTP, and reacts differently depending on *how* it fails: if the container responds with a non-200 status code, the script emails an alert and restarts just the Docker container over SSH; if the server is completely unreachable (e.g. the whole VM is down), the script emails an alert, reboots the Linode instance itself via the Linode API, waits for it to come back online, and then restarts the container — fully automating an incident-response runbook that would otherwise require a human to notice the outage and manually intervene.
 
 ### Python Automation key features
 
-- 🏷️ **Tag-driven targeting** — every script filters volumes using `Filters=[{'Name': 'tag:Name', 'Values': ['prod']}]`, so only volumes explicitly tagged for backup are touched, leaving `dev`/other environments untouched.
-- ⏰ **Scheduled, unattended backups** — `volume-backups.py` uses the `schedule` library to trigger `create_snapshot()` once every day automatically, with no cron job or external scheduler required.
-- 🧹 **Automated retention/cleanup policy** — `cleanup-snapshots.py` sorts each volume's snapshots by `StartTime` (newest first) and deletes everything beyond the two most recent, keeping storage costs predictable as backups accumulate.
-- ♻️ **End-to-end restore workflow** — `restore-volume.py` chains together `describe_volumes` → `describe_snapshots` → `create_volume` → a `while True` readiness poll → `attach_volume`, fully automating what would otherwise be a multi-step, manual console recovery procedure.
-- 🩺 **State-aware polling** — the restore script polls `ec2_resource.Volume(...).state` in a loop until AWS reports the newly created volume as `available`, only then attaching it — avoiding a race condition where the volume isn't ready to be attached yet.
-- 🧩 **Composable by design** — each script is independent and single-purpose (create, cleanup, or restore), so any one of them can be scheduled, triggered by an event, or wired into a CI/CD pipeline without touching the others.
+- 🩺 **Continuous HTTP health checks** — `monitor_application()` uses the `requests` library to poll the Nginx endpoint on a recurring schedule and inspects the HTTP status code to decide whether the site is healthy.
+- 📧 **Automated email alerting** — `send_notification()` uses Python's built-in `smtplib` to send a "SITE DOWN" email over Gmail's SMTP server the moment a failure is detected, so the on-call engineer is notified without watching a dashboard.
+- 🔁 **Two-tier, failure-aware recovery** — the script distinguishes between an *application-level* failure (container crashed but server is up, handled by `restart_container()`) and a *total connection failure* (server itself is down, handled by `restart_server_and_container()`), applying the least disruptive fix necessary for the situation.
+- 🔐 **Remote container restarts over SSH** — `restart_container()` uses `paramiko` to open an SSH session to the remote Linode server and run `docker start` directly, with no manual login required.
+- ☁️ **Programmatic server reboot via the Linode API** — `restart_server_and_container()` uses the `linode_api4` SDK to reboot the cloud instance itself when it's completely unresponsive, then polls the instance status until it reports `running` before restarting the application.
+- 🔑 **Secrets kept out of source code** — email credentials, the Linode API token, and the SSH key path are all loaded from environment variables via `python-dotenv`, keeping sensitive values out of version control.
+- ⏱️ **Unattended, scheduled execution** — the `schedule` library drives the whole monitor loop, checking the site's health automatically every few minutes for as long as the script runs.
 
 ## Demo Project
 
-AWS Data Backup & Restore with Python
+Website Monitoring and Recovery with Python
 
 ## Technologies used
 
 - Python
-- Boto3
-- AWS
+- Linode
+- Docker
+- Linux
 
 ## Project Description
 
-- Write a Python script that automates creating backups for EC2 Volumes
-- Write a Python script that cleans up old EC2 Volume snapshots
-- Write a Python script that restores EC2 Volumes
+- Create a server on a cloud platform
+- Install Docker and run a Docker container on the remote server
+- Write a Python script that monitors the website by accessing it and validating the HTTP response
+- Write a Python script that sends an email notification when website is down
+- Write a Python script that automatically restarts the application & server when the application is down
 
 ## Repository structure
 
 ```text
-aws-data-backup-and-restore-with-python/
-├── README.md                                        # This file
-├── NOTES.md                                         # Raw study notes this project was built from
-├── volume-backups.py                                # Scheduled script: snapshots every "prod"-tagged volume daily
-├── cleanup-snapshots.py                             # One-shot script: keeps only the 2 most recent snapshots per volume
-├── restore-volume.py                                # One-shot script: restores & reattaches a volume from its latest snapshot
-└── images/                                           # Screenshots referenced in this README
-    ├── snapshots-created-aws-console.png            # AWS console: 7 completed snapshots created by volume-backups.py
-    └── volume-restored-from-snapshot-aws-console.png # AWS console: restored volume attached to the "prod" instance
+website-monitoring-and-recovery-with-python/
+├── README.md          # This file
+├── NOTES.md           # Raw study notes this project was built from
+├── main.py            # Combined monitoring, alerting & recovery script
+├── .env               # Local environment variables (gitignored, never committed)
+├── example.env        # Template showing which environment variables are required
+├── .gitignore         # Excludes .env, Terraform artifacts, and OS files from version control
+└── images/            # Screenshots referenced in this README
+    ├── nginx-browser.png            # Browser: default Nginx welcome page served from the Linode instance
+    ├── website-monitor-terminal.png # Terminal: main.py detecting an outage and self-healing
+    └── site-down-email.png          # Gmail inbox: automated "SITE DOWN" alert email
 ```
 
-> 🔒 **Security note:** This project relies on the AWS SDK's default credential chain (environment variables, shared `~/.aws/credentials` file, or an IAM role) rather than hardcoded access keys, so no secrets ever need to live in the source code or in version control.
+> 🔒 **Security note:** All credentials (Gmail address/app password, Linode API token, SSH private key path) are read from environment variables via `python-dotenv` rather than hardcoded in `main.py`. `.env` is excluded from version control by `.gitignore`, and only `example.env` — containing placeholder values and links to where real credentials should be generated — is committed to the repository.
 
 ## Architecture overview
 
 ```mermaid
 flowchart TB
-    subgraph AWS["AWS Region: eu-central-1"]
-        InstanceProd[EC2 instance: prod]
-        InstanceDev[EC2 instance: dev]
-        VolProd["EBS Volume<br/>tag: Name=prod"]
-        VolDev["EBS Volume<br/>tag: Name=dev"]
-        Snap1[Snapshot Day 1]
-        Snap2[Snapshot Day 2]
-        Snap3[Snapshot Day 3 …]
-        NewVol["New EBS Volume<br/>(from latest snapshot)"]
+    Cron["⏱️ schedule library<br/>(every 5 seconds)"]
+    Script["main.py<br/>monitor_application()"]
+    Site["🌐 Nginx site<br/>172-235-6-68.ip.linodeusercontent.com:8080"]
+    Gmail["📧 Gmail SMTP<br/>smtplib"]
+    SSH["🔐 SSH (paramiko)"]
+    LinodeAPI["☁️ Linode API<br/>(linode_api4)"]
+
+    subgraph Linode["Linode Cloud Instance"]
+        Docker["🐳 Docker Engine"]
+        Container["nginx-server container<br/>(port 8080 → 80)"]
+        Docker --- Container
     end
 
-    Dev[👤 Developer / scheduler] -- "python volume-backups.py<br/>(daily via schedule)" --> VolProd
-    InstanceProd --- VolProd
-    InstanceDev --- VolDev
-    VolProd -- create_snapshot --> Snap1 & Snap2 & Snap3
+    Cron --> Script
+    Script -- "GET request" --> Site
+    Site -. "hosted by" .-> Container
 
-    Dev -- "python cleanup-snapshots.py" --> Snap1
-    Snap1 -. "deleted, keep only 2 newest" .-> X((🗑️))
+    Script -- "non-200 / app down" --> Gmail
+    Script -- "non-200 / app down" --> SSH
+    SSH -- "docker start <container-id>" --> Docker
 
-    Dev -- "python restore-volume.py" --> Snap3
-    Snap3 -- create_volume --> NewVol
-    NewVol -- attach_volume /dev/xvdb --> InstanceProd
+    Script -- "ConnectionError / server down" --> Gmail
+    Script -- "ConnectionError / server down" --> LinodeAPI
+    LinodeAPI -- "reboot instance" --> Linode
+    LinodeAPI -- "poll status == running" --> Linode
+    Script -- "after reboot completes" --> SSH
 ```
 
-- Two EC2 instances are created up front and tagged by **Name**: `prod` and `dev`.
-- **`volume-backups.py`** runs continuously in the foreground (or as a background/systemd process) and, once per day, calls `describe_volumes` filtered to `tag:Name=prod`, then `create_snapshot()` for each matching volume — leveraging the fact that [EBS snapshots are incremental](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSSnapshots.html): only the blocks changed since the last snapshot are actually saved, keeping backup time and storage cost low.
-- **`cleanup-snapshots.py`** is a one-shot maintenance script — for each `prod`-tagged volume, it fetches all of that volume's snapshots via `describe_snapshots(OwnerIds=['self'], Filters=[{'Name': 'volume-id', ...}])`, sorts them newest-first by `StartTime`, and deletes every snapshot beyond the 2 most recent using `delete_snapshot()`.
-- **`restore-volume.py`** is the disaster-recovery path: given a target `instance_id`, it looks up that instance's attached volume, finds its most recent snapshot, calls `create_volume(SnapshotId=...)` to materialize a brand-new volume from that snapshot's data, polls the new volume's state until it's `available`, and finally calls `attach_volume()` to mount it on the instance at `/dev/xvdb`.
+- A **Linode server** hosts a **Docker** container running the official **Nginx** image, exposed on port `8080`.
+- `main.py` runs continuously and, every 5 minutes, sends an HTTP `GET` request to the site's public Linode hostname.
+- If the response status code isn't `200`, the script treats this as an **application-level failure**: it sends an email alert and restarts only the Docker container over SSH — the fastest, least disruptive fix.
+- If the request raises a connection error entirely (the server itself is unreachable), the script treats this as a **server-level failure**: it sends an email alert, reboots the entire Linode instance via the Linode API, polls the instance status until it's back to `running`, and only then restarts the container — since the container obviously can't be started while its host is rebooting.
+- This two-tier design means the script always applies the smallest possible remediation for the type of failure observed, rather than always reaching for a full server reboot.
 
 ## Implementation Guide
 
@@ -86,230 +97,219 @@ flowchart TB
 
 Before running this project, make sure you have:
 
-- ✅ An **AWS account** with an IAM user/role that has permissions for `ec2:DescribeVolumes`, `ec2:CreateSnapshot`, `ec2:DescribeSnapshots`, `ec2:DeleteSnapshot`, `ec2:CreateVolume`, and `ec2:AttachVolume`.
-- ✅ The **AWS CLI** installed and configured with valid credentials (`aws configure`), since Boto3 relies on the same default credential chain.
+- ✅ A **[Linode](https://www.linode.com/)** account — Linode is a cloud computing platform that provides on-demand virtual machines ("Linodes"), object storage, and managed Kubernetes, similar to AWS EC2 or DigitalOcean Droplets.
+- ✅ A Linode server (Linode instance) already provisioned and reachable over SSH.
+- ✅ **Docker** installed on that server, per the official [Docker Engine installation guide for Debian](https://docs.docker.com/engine/install/debian/).
 - ✅ **Python 3** installed locally.
-- ✅ **Boto3** and **schedule** installed (see step 2 below).
-- ✅ **Two EC2 instances already running** in the target region (`eu-central-1` in this project), each with an EBS volume attached — one tagged `Name=prod` (to be backed up) and one tagged `Name=dev` (to be excluded).
+- ✅ A **Gmail account** with an [App Password](https://myaccount.google.com/apppasswords) generated (required when 2-Factor Authentication is enabled, since Gmail no longer allows plain password SMTP login for third-party apps).
+- ✅ A **Linode API token**, generated from the [Linode Cloud Manager API tokens page](https://cloud.linode.com/profile/tokens).
+- ✅ An **SSH key pair** whose public key is authorized on the Linode server, so `paramiko` can authenticate without a password prompt.
 
 ```bash
 # verify tool versions
 python3 --version
-aws --version
 
-# verify AWS credentials are wired up correctly
-aws sts get-caller-identity
-
-# confirm the prod-tagged volume exists in the target region
-aws ec2 describe-volumes --region eu-central-1 --filters "Name=tag:Name,Values=prod"
+# verify you can reach and authenticate to the Linode server over SSH
+ssh -i /path/to/id_ed25519 root@<server-ip>
 ```
 
-### 2. Install the Python dependencies
+### 2. Provision the server and install Docker
 
-The backup script relies on **Boto3** for all AWS API calls and **schedule** for the recurring daily job loop.
+A Linode instance is created through the Linode Cloud Manager, then Docker is installed on it following Docker's official APT repository instructions for Debian:
 
 ```bash
-pip install boto3
-pip install schedule
+# Add Docker's official GPG key:
+sudo apt update
+sudo apt install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-### 3. Tag the EC2 volumes to identify backup targets
+### 3. Run the Nginx container
 
-Two EC2 instances are created via the AWS console and tagged `Name=dev` and `Name=prod` respectively. Only the volume attached to the `prod` instance is targeted for backups — this tag-based filtering is what every script in this repo relies on to know *which* volumes to act on.
+With Docker installed, an [Nginx](https://nginx.org/) container — a high-performance, open-source web server and reverse proxy — is started and its internal port `80` is mapped to `8080` on the host:
 
-### 4. Automate creating EC2 volume snapshots
+```bash
+sudo docker run -d -p 8080:80 --name nginx-server nginx
+```
 
-`volume-backups.py` finds every volume tagged `Name=prod` and creates a snapshot of each one, once per day:
+Visiting the server's public hostname on port `8080` in a browser confirms Nginx is up and serving its default welcome page:
+
+![Browser showing the default Nginx welcome page served from the Linode instance on port 8080](images/nginx-browser.png)
+
+### 4. Install the Python dependencies
+
+The monitoring script relies on several libraries: `requests` for HTTP health checks, `paramiko` for [SSH](https://www.paramiko.org/) automation, `linode_api4` for the [Linode API](https://www.linode.com/docs/api/), `schedule` for the recurring check loop, and `python-dotenv` to load credentials from a `.env` file.
+
+```bash
+pip install requests
+pip install paramiko
+pip install linode_api4
+pip install schedule
+pip install python-dotenv
+```
+
+### 5. Configure environment variables
+
+Following the principle of never hardcoding secrets in source code, all credentials are loaded via Python's `os` module from environment variables populated by a local `.env` file (excluded from version control). `example.env` documents exactly which variables are required and where to obtain each one:
+
+```bash
+EMAIL_ADDRESS=mail@gmail.com
+EMAIL_PASSWORD=password from https://myaccount.google.com/apppasswords
+LINODE_TOKEN=linode token from https://cloud.linode.com/profile/tokens
+KEY_FILENAME=/Users/username/.ssh/id_ed25519
+```
+
+Copy this template to a real `.env` file and fill in actual values:
+
+```bash
+cp example.env .env
+```
+
+- `EMAIL_ADDRESS` / `EMAIL_PASSWORD` — the Gmail account and [App Password](https://myaccount.google.com/apppasswords) used to authenticate with Gmail's SMTP server and send alert emails.
+- `LINODE_TOKEN` — a personal access token from the [Linode Cloud Manager](https://cloud.linode.com/profile/tokens), used by `linode_api4` to authenticate API calls like rebooting the instance.
+- `KEY_FILENAME` — the local path to the private SSH key authorized on the Linode server, used by `paramiko` to connect without a password prompt.
+
+### 6. Write the monitoring, alerting & recovery script
+
+`main.py` combines HTTP health checking, email alerting, and two tiers of automated recovery into a single scheduled script:
 
 ```py
-import boto3
+import requests
+import smtplib
+import os
+import paramiko
+import linode_api4
+import time
 import schedule
+import dotenv
 
-ec2_client = boto3.client('ec2', region_name="eu-central-1")
+dotenv.load_dotenv()
 
-
-def create_volume_snapshots():
-    volumes = ec2_client.describe_volumes(
-        Filters=[
-            {
-                'Name': 'tag:Name',
-                'Values': ['prod']
-            }
-        ]
-    )
-    for volume in volumes['Volumes']:
-        new_snapshot = ec2_client.create_snapshot(
-            VolumeId=volume['VolumeId']
-        )
-        print(new_snapshot)
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+LINODE_TOKEN = os.environ.get('LINODE_TOKEN')
+KEY_FILENAME = os.environ.get('KEY_FILENAME')
 
 
-schedule.every().day.do(create_volume_snapshots)
+def restart_server_and_container():
+    # restart linode server
+    print('Rebooting the server...')
+    client = linode_api4.LinodeClient(LINODE_TOKEN)
+    nginx_server = client.load(linode_api4.Instance, 106818789)
+    nginx_server.reboot()
+
+    # restart the application
+    while True:
+        nginx_server = client.load(linode_api4.Instance, 106818789)
+        if nginx_server.status == 'running':
+            time.sleep(5)
+            restart_container()
+            break
+
+
+def send_notification(email_msg):
+    print('Sending an email...')
+    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        message = f"Subject: SITE DOWN\n{email_msg}"
+        smtp.sendmail(EMAIL_ADDRESS, EMAIL_ADDRESS, message)
+
+
+def restart_container():
+    print('Restarting the application...')
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(hostname='172.235.6.68', username='root', key_filename=KEY_FILENAME)
+    stdin, stdout, stderr = ssh.exec_command('docker start 6c2e0f336181')
+    print(stdout.readlines())
+    ssh.close()
+
+
+def monitor_application():
+    try:
+        response = requests.get('http://172-235-6-68.ip.linodeusercontent.com:8080/')
+        if response.status_code == 200:
+            print('Application is running successfully!')
+        else:
+            print('Application Down. Fix it!')
+            msg = f'Application returned {response.status_code}'
+            send_notification(msg)
+            restart_container()
+    except Exception as ex:
+        print(f'Connection error happened: {ex}')
+        msg = 'Application not accessible at all'
+        send_notification(msg)
+        restart_server_and_container()
+
+
+schedule.every(5).seconds.do(monitor_application)
 
 while True:
     schedule.run_pending()
 ```
 
-- `describe_volumes(Filters=[{'Name': 'tag:Name', 'Values': ['prod']}])` returns only the volumes carrying the `prod` tag, regardless of which instance they're attached to.
-- `schedule.every().day.do(create_volume_snapshots)` registers the job to run once every 24 hours.
+- `dotenv.load_dotenv()` reads the local `.env` file and injects its key-value pairs into the process environment, which `os.environ.get(...)` then reads — keeping every credential out of the script itself.
+- `monitor_application()` is the entry point: it wraps the HTTP check in a `try/except` so that a completely failed connection (server down) is handled differently from a successful connection that simply returns a bad status code (application down).
+- On an application-level failure (non-200 response), only `send_notification()` and `restart_container()` run — the lightest-touch fix, since the server itself is clearly still reachable.
+- On a total connection failure, both `send_notification()` and `restart_server_and_container()` run — which reboots the Linode instance via `linode_api4`, polls `nginx_server.status` in a loop until it reports `'running'`, waits a few extra seconds for the OS/Docker daemon to fully come up, and only then calls `restart_container()`.
+- `restart_container()` opens a `paramiko` SSH session with `AutoAddPolicy()` (auto-accepting the host key, appropriate for a single-purpose automation script against a known server) and runs `docker start <container-id>` remotely — no manual login needed.
+- `schedule.every(5).seconds.do(monitor_application)` combined with the `while True: schedule.run_pending()` loop is what keeps the health check running indefinitely, once every 5 minutes.
 
 Run it with:
 
 ```bash
-python volume-backups.py
+python main.py
 ```
 
-Running this repeatedly produces a growing list of completed snapshots for the `prod` volume, visible under **EC2 → Elastic Block Store → Snapshots** in the AWS console:
+### 7. Trigger and observe the recovery workflow
 
-![AWS console showing 7 completed EBS snapshots, each 8 GiB, created by volume-backups.py](images/snapshots-created-aws-console.png)
+To validate the recovery paths, the Nginx container and/or the Linode server were deliberately stopped while `main.py` was running. The terminal output shows the script detecting the outage, sending an alert, and self-healing automatically:
 
-### 5. Automate cleanup of old snapshots
+![Terminal output showing main.py detecting a connection error, sending an email, rebooting the server, and restarting the application, before reporting the application is running successfully again](images/website-monitor-terminal.png)
 
-Left unchecked, daily snapshots accumulate indefinitely and drive up storage costs. `cleanup-snapshots.py` keeps only the **2 most recent** snapshots per `prod`-tagged volume and deletes the rest:
+At the same time, the configured Gmail inbox receives the automated outage notification within seconds of the failure being detected:
 
-```py
-import boto3
-from operator import itemgetter
-
-ec2_client = boto3.client('ec2', region_name="eu-central-1")
-
-volumes = ec2_client.describe_volumes(
-    Filters=[
-        {
-            'Name': 'tag:Name',
-            'Values': ['prod']
-        }
-    ]
-)
-
-for volume in volumes['Volumes']:
-    snapshots = ec2_client.describe_snapshots(
-        OwnerIds=['self'],
-        Filters=[
-            {
-                'Name': 'volume-id',
-                'Values': [volume['VolumeId']]
-            }
-        ]
-    )
-
-    sorted_by_date = sorted(snapshots['Snapshots'], key=itemgetter('StartTime'), reverse=True)
-
-    for snap in sorted_by_date[2:]:
-        response = ec2_client.delete_snapshot(
-            SnapshotId=snap['SnapshotId']
-        )
-        print(response)
-```
-
-- `OwnerIds=['self']` scopes the snapshot lookup to snapshots owned by your own AWS account, avoiding accidentally matching public/shared snapshots.
-- `sorted(..., key=itemgetter('StartTime'), reverse=True)` orders snapshots from newest to oldest; slicing with `[2:]` then selects everything **after** the two most recent, which is exactly what gets deleted.
-- Because snapshots are incremental, deleting an older snapshot doesn't remove data still referenced by a newer one — AWS only reclaims storage for blocks that are no longer needed by any remaining snapshot.
-
-Run it with:
-
-```bash
-python cleanup-snapshots.py
-```
-
-### 6. Automate restoring an EC2 volume from a snapshot
-
-`restore-volume.py` is the disaster-recovery script: given a target instance, it finds that instance's volume, locates its most recent snapshot, creates a brand-new volume from it, waits for the volume to become available, and attaches it back to the instance:
-
-```py
-import boto3
-from operator import itemgetter
-
-ec2_client = boto3.client('ec2', region_name="eu-central-1")
-ec2_resource = boto3.resource('ec2', region_name="eu-central-1")
-
-instance_id = "i-02fad658e88bf1121"
-
-volumes = ec2_client.describe_volumes(
-    Filters=[
-        {
-            'Name': 'attachment.instance-id',
-            'Values': [instance_id]
-        }
-    ]
-)
-
-instance_volume = volumes['Volumes'][0]
-
-snapshots = ec2_client.describe_snapshots(
-    OwnerIds=['self'],
-    Filters=[
-        {
-            'Name': 'volume-id',
-            'Values': [instance_volume['VolumeId']]
-        }
-    ]
-)
-
-latest_snapshot = sorted(snapshots['Snapshots'], key=itemgetter('StartTime'), reverse=True)[0]
-print(latest_snapshot['StartTime'])
-
-new_volume = ec2_client.create_volume(
-    SnapshotId = latest_snapshot['SnapshotId'],
-    AvailabilityZone = "eu-central-1b",
-    TagSpecifications = [
-        {
-            'ResourceType': 'volume',
-            'Tags': [
-                {
-                    'Key': 'Name',
-                    'Value': 'prod'
-                }
-            ]
-        }
-    ]
-)
-
-while True:
-    vol = ec2_resource.Volume(new_volume['VolumeId'])
-    print(vol.state)
-    if vol.state == 'available':
-        ec2_resource.Instance(instance_id).attach_volume(
-            VolumeId=new_volume['VolumeId'],
-            Device='/dev/xvdb'
-        )
-        break
-```
-
-- `Filters=[{'Name': 'attachment.instance-id', 'Values': [instance_id]}]` finds the volume currently attached to the target instance, so the script doesn't need the volume ID hardcoded — only the instance ID.
-- `create_volume(SnapshotId=...)` materializes a **new, independent EBS volume** pre-populated with the snapshot's data — per AWS documentation, the new volume "begins as an exact replica of the volume that was used to create the snapshot."
-- The `while True` polling loop against `ec2_resource.Volume(...).state` is necessary because volume creation from a snapshot is asynchronous — attaching too early (while the volume is still `creating`) would fail, so the script waits until AWS reports `available`.
-- The restored volume is attached at `/dev/xvdb` — a **second** device on the instance, alongside its original root volume.
-
-Run it with:
-
-```bash
-python restore-volume.py
-```
-
-Once the script completes, the instance now shows two attached volumes — the original root volume and the freshly restored one — confirmed in the **EC2 → Instances → Block devices** view of the console:
-
-![AWS console showing the prod instance with two attached EBS volumes: the original root volume and the restored volume from the snapshot](images/volume-restored-from-snapshot-aws-console.png)
+![Gmail inbox showing an automated "SITE DOWN" email with the body "Application not accessible at all"](images/site-down-email.png)
 
 ## Final result
 
-By combining these three Python scripts, the following was achieved:
+By combining these components, the following was achieved:
 
-- ✅ A fully automated, tag-driven daily backup job for EC2 volumes, requiring no external cron daemon, AWS Backup plan, or Data Lifecycle Manager policy.
-- ✅ An automated retention policy that keeps snapshot storage costs under control by pruning old snapshots down to the two most recent per volume.
-- ✅ A scripted, repeatable disaster-recovery procedure that restores a volume from its latest snapshot and reattaches it to a running instance in seconds, without manual console steps.
+- ✅ A live Nginx web application running in Docker on a Linode cloud server, continuously monitored over HTTP.
+- ✅ Instant, automated email alerts the moment the site becomes unreachable or returns an unhealthy status code — with no human needing to be actively watching.
+- ✅ A two-tier, failure-aware self-healing mechanism: a lightweight container restart for application-level failures, and a full instance reboot plus container restart for total server outages.
+- ✅ Verified, screenshot-backed proof of the entire incident lifecycle — from the healthy Nginx page, through the detected outage and email alert in the terminal, to the received alert email itself.
+- ✅ Credentials (Gmail app password, Linode API token, SSH key path) kept entirely out of source control via environment variables and a `.gitignore`'d `.env` file.
 
-This pattern scales directly into production use cases such as feeding snapshot completion/failure events into Slack/PagerDuty, extending the retention policy to be time-based (e.g. "keep 7 daily + 4 weekly"), or triggering the restore script automatically from a health-check failure.
+This pattern mirrors real-world site reliability engineering (SRE) practice: cheap, frequent synthetic health checks; alerting that fires before a customer notices; and automated, graduated remediation that only escalates to a full reboot when a lighter-touch fix wouldn't work.
 
 ## References
 
-- [AWS Boto3 Documentation](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)
-- [Boto3 EC2 Client — `create_snapshot`](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2/client/create_snapshot.html)
-- [Boto3 EC2 Client — `describe_snapshots`](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2/client/describe_snapshots.html)
-- [Boto3 EC2 Client — `delete_snapshot`](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2/client/delete_snapshot.html)
-- [Boto3 EC2 Client — `create_volume`](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2/client/create_volume.html)
-- [Boto3 EC2 Resource — `attach_volume`](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2/instance/attach_volume.html)
-- [AWS EC2 User Guide — Amazon EBS snapshots](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSSnapshots.html)
-- [AWS EC2 User Guide — Tag your Amazon EC2 resources](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html)
+- [Linode Cloud Manager Documentation](https://www.linode.com/docs/)
+- [Linode API Reference](https://www.linode.com/docs/api/)
+- [`linode_api4` Python library documentation](https://www.linode.com/docs/products/tools/api/guides/linode-api4-python-library/)
+- [Docker Engine installation guide for Debian](https://docs.docker.com/engine/install/debian/)
+- [Official Nginx Docker image](https://hub.docker.com/_/nginx)
+- [Python `requests` library documentation](https://requests.readthedocs.io/)
+- [Python `smtplib` documentation](https://docs.python.org/3/library/smtplib.html)
+- [Gmail App Passwords](https://myaccount.google.com/apppasswords)
+- [`paramiko` SSH library documentation](https://www.paramiko.org/)
 - [Python `schedule` library documentation](https://schedule.readthedocs.io/en/stable/)
-- [AWS CLI — Configuration basics](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
+- [`python-dotenv` documentation](https://saurabh-kumar.com/python-dotenv/)

@@ -484,3 +484,167 @@ while True:
 
 To handle errors in Boto3, we can use try-except blocks to catch exceptions and handle them gracefully.
 
+## 13 - Website Monitoring 1: Scheduled Task to Monitor Application Health
+
+Create a server on linode and install docker.
+
+```bash
+# Add Docker's official GPG key:
+sudo apt update
+sudo apt install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Run nginx container on the server.
+
+```bash
+sudo docker run -d -p 8080:80 --name nginx-server nginx
+```
+
+Install "requests" library in python to make http requests.
+
+```bash
+pip install requests
+```
+
+Send request to check the health of the application running on the server.
+
+```py
+import requests
+
+def check_website_health():
+    url = "http://<server-ip>:8080"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            print(f"Website is up and running. Status code: {response.status_code}")
+        else:
+            print(f"Website is down. Status code: {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred: {e}")
+```
+
+## 14 - Website Monitoring 2: Automated Email Notification
+
+Setup gmail as email server to send email notifications using python smtplib library.
+
+Navigate to https://myaccount.google.com/lesssecureapps and enable "Allow less secure apps" to allow sending emails from python script. If you have 2FA enabled, you need to create an app password and use it instead of your regular password in the url https://myaccount.google.com/apppasswords.
+
+Use "os" library to read the email and password from environment variables instead of hardcoding them in the script.
+
+```py
+import smtplib
+import os
+
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+
+def send_notification(email_msg):
+    print('Sending an email...')
+    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        message = f"Subject: SITE DOWN\n{email_msg}"
+        smtp.sendmail(EMAIL_ADDRESS, EMAIL_ADDRESS, message)
+```
+
+## 15 - Website Monitoring 3: Restart Application and Reboot Server
+
+zxvb dgei wivi umif
+
+USe "paramako" library to connect to the server via ssh and restart the application or reboot the server.
+
+Install "linode_api4" library to connect to the linode server and reboot it.
+
+```py
+import requests
+import smtplib
+import os
+import paramiko
+import linode_api4
+import time
+import schedule
+import dotenv
+
+dotenv.load_dotenv()
+
+EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+LINODE_TOKEN = os.environ.get('LINODE_TOKEN')
+KEY_FILENAME = os.environ.get('KEY_FILENAME')
+
+
+def restart_server_and_container():
+    # restart linode server
+    print('Rebooting the server...')
+    client = linode_api4.LinodeClient(LINODE_TOKEN)
+    nginx_server = client.load(linode_api4.Instance, 106818789)
+    nginx_server.reboot()
+
+    # restart the application
+    while True:
+        nginx_server = client.load(linode_api4.Instance, 106818789)
+        if nginx_server.status == 'running':
+            time.sleep(5)
+            restart_container()
+            break
+
+
+def send_notification(email_msg):
+    print('Sending an email...')
+    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        message = f"Subject: SITE DOWN\n{email_msg}"
+        smtp.sendmail(EMAIL_ADDRESS, EMAIL_ADDRESS, message)
+
+
+def restart_container():
+    print('Restarting the application...')
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(hostname='172.235.6.68', username='root', key_filename=KEY_FILENAME)
+    stdin, stdout, stderr = ssh.exec_command('docker start 6c2e0f336181')
+    print(stdout.readlines())
+    ssh.close()
+
+
+def monitor_application():
+    try:
+        response = requests.get('http://172-235-6-68.ip.linodeusercontent.com:8080/')
+        if response.status_code == 200:
+            print('Application is running successfully!')
+        else:
+            print('Application Down. Fix it!')
+            msg = f'Application returned {response.status_code}'
+            send_notification(msg)
+            restart_container()
+    except Exception as ex:
+        print(f'Connection error happened: {ex}')
+        msg = 'Application not accessible at all'
+        send_notification(msg)
+        restart_server_and_container()
+
+
+schedule.every(5).seconds.do(monitor_application)
+
+while True:
+    schedule.run_pending()
+```
