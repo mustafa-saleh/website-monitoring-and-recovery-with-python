@@ -57,7 +57,7 @@ website-monitoring-and-recovery-with-python/
 
 ```mermaid
 flowchart TB
-    Cron["⏱️ schedule library<br/>(every 5 seconds)"]
+    Cron["⏱️ schedule library<br/>(every 5 minutes)"]
     Script["main.py<br/>monitor_application()"]
     Site["🌐 Nginx site<br/>172-235-6-68.ip.linodeusercontent.com:8080"]
     Gmail["📧 Gmail SMTP<br/>smtplib"]

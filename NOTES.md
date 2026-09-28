@@ -643,7 +643,7 @@ def monitor_application():
         restart_server_and_container()
 
 
-schedule.every(5).seconds.do(monitor_application)
+schedule.every(5).minutes.do(monitor_application)
 
 while True:
     schedule.run_pending()
